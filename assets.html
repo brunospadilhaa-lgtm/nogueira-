@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Roda — videochamada em grupo</title>
+<style>
+:root{--bg:#f6f3ee;--sf:#fff;--tx:#1d1b18;--mu:#6d675f;--ac:#e0482f;--bd:#e3ddd3;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14161a;--sf:#1e2127;--tx:#eeeae3;--mu:#9a958c;--bd:#2c3038}}
+:root[data-theme="dark"]{--bg:#14161a;--sf:#1e2127;--tx:#eeeae3;--mu:#9a958c;--bd:#2c3038}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:20px 16px 96px}
+h1{font-size:2.4rem;margin:.3em 0 0;letter-spacing:-.03em}h1 i{color:var(--ac);font-style:normal}
+h2{font-size:1.05rem;margin:0 0 10px}.mu{color:var(--mu)}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:16px;padding:16px;margin:14px 0}
+label{display:block;font-weight:600;margin-top:18px}
+input{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:10px 12px}
+.row{display:flex;gap:8px}.row input{flex:1;min-width:0}
+button{font:inherit;font-weight:600;border:0;border-radius:999px;padding:10px 18px;background:var(--ac);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+button.off{background:var(--mu)}button.danger{background:#b3261e}
+#rl button{margin:0 6px 6px 0}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+#gc{user-select:all;word-break:break-all}
+#grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px}
+.tile{position:relative;aspect-ratio:16/10;background:#000;border-radius:14px;overflow:hidden}
+.tile video{width:100%;height:100%;object-fit:cover}
+.tile.scr video{object-fit:contain}.tile.me:not(.scr) video{transform:scaleX(-1)}
+.lb{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;font-size:.85rem;padding:2px 10px;border-radius:999px}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;flex-wrap:wrap;gap:8px;padding:12px 12px calc(12px + env(safe-area-inset-bottom,0px));background:var(--bg);border-top:1px solid var(--bd)}
+</style></head><body>
+<main id="home">
+<h1>Ro<i>d</i>a</h1><p class="mu">Videochamada em grupo com compartilhamento de tela.</p>
+<label for="nm">Seu nome</label><input id="nm" maxlength="24" placeholder="Como te chamamos?">
+<section class="card"><h2>Criar grupo</h2><div class="row"><input id="gn" maxlength="30" placeholder="Nome do grupo"><button id="mk">Criar</button></div>
+<p class="mu" style="margin:8px 0 0;font-size:.9rem">Você recebe um código (e um link) para passar aos amigos. Mantenha a página aberta enquanto eles entram.</p></section>
+<section class="card"><h2>Entrar com código</h2><div class="row"><input id="cd" maxlength="48" placeholder="ex.: amigos-4k2f"><button id="jn">Entrar</button></div></section>
+<section class="card" id="rc" hidden><h2>Grupos recentes</h2><div id="rl"></div></section>
+<p id="msg" class="mu" role="status"></p>
+</main>
+<main id="call" hidden>
+<header><div><b id="gt"></b><div class="mu" id="gc"></div></div><button class="ghost" id="cp">Copiar link</button></header>
+<div id="grid"></div>
+<nav><button id="bm">🎤 Mic</button><button id="bc">📷 Câmera</button><button id="bs">🖥 Compartilhar tela</button><button id="bl" class="danger">Sair</button></nav>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let peer,local,screen,silent,code='',host=false,myName='',names={},dc={},calls={},out={},tiles={};
+const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const say=t=>{$('msg').textContent=t||''};
+const slug=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30)||'grupo';
+const nick=()=>$('nm').value.trim()||'Visitante';
+const lm=()=>local||silent||(silent=(()=>{try{return new AudioContext().createMediaStreamDestination().stream}catch(e){return new MediaStream()}})());
+function recents(){let r=[];try{r=JSON.parse(ls.get('roda:rec')||'[]')}catch(e){}return r}
+function drawRecents(){const r=recents();$('rc').hidden=!r.length;$('rl').textContent='';r.forEach(c=>{const b=document.createElement('button');b.className='ghost';b.textContent=c;b.onclick=()=>start(c,0);$('rl').append(b)})}
+$('nm').value=ls.get('roda:nome')||'';if(location.hash)$('cd').value=decodeURIComponent(location.hash.slice(1));drawRecents();
+$('mk').onclick=()=>start(slug($('gn').value||'grupo')+'-'+Math.random().toString(36).slice(2,6),1);
+$('jn').onclick=()=>start($('cd').value,0);
+async function start(c,create){
+  c=c.trim().toLowerCase().replace(/^.*#/,'');
+  if(!/^[a-z0-9][a-z0-9_-]{0,47}$/.test(c))return say('Código inválido: use letras, números e hífen.');
+  if(typeof Peer==='undefined')return say('Não consegui carregar a biblioteca de chamadas. Verifique sua internet.');
+  const own=(ls.get('roda:own')||'').split(',');create=create||own.includes(c);
+  if(create&&!own.includes(c))ls.set('roda:own',own.concat(c).slice(-20).join(','));
+  myName=nick();ls.set('roda:nome',myName);say('Entrando…');
+  try{local=await navigator.mediaDevices.getUserMedia({video:true,audio:true})}
+  catch(e){try{local=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e2){local=null}}
+  code=c;host=create;peer=new Peer(create?'roda-'+c:undefined);
+  peer.on('error',e=>{const joining=!$('home').hidden;
+    const t=e.type==='peer-unavailable'?'Grupo não encontrado: o criador precisa estar com a página aberta.':e.type==='unavailable-id'?'Esse grupo já está aberto em outro lugar.':'Falha de conexão ('+e.type+').';
+    if(joining){leave();say(t)}});
+  peer.on('open',()=>{ui();if(!create)reg(peer.connect('roda-'+c,{reliable:true}))});
+  peer.on('connection',reg);peer.on('call',c=>{const s=c.metadata&&c.metadata.scr;c.answer(s?undefined:lm());hook(c,c.peer,!!s)});
+}
+function ui(){say('');ls.set('roda:rec',JSON.stringify([code,...recents().filter(x=>x!==code)].slice(0,5)));
+  $('home').hidden=true;$('call').hidden=false;$('gt').textContent=code.replace(/-[a-z0-9]{4}$/,'');$('gc').textContent=code;
+  $('bs').hidden=!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia);tile('me',local,'Você',1)}
+function tile(key,stream,label,mine,isScr){
+  let t=tiles[key];
+  if(!t){t=tiles[key]=document.createElement('div');t.className='tile'+(mine?' me':'')+(isScr?' scr':'');
+    const v=document.createElement('video');v.autoplay=true;v.playsInline=true;v.muted=!!mine;t.append(v);
+    const l=document.createElement('span');l.className='lb';t.append(l);$('grid').append(t)}
+  const v=t.firstChild;if(stream&&v.srcObject!==stream)v.srcObject=stream;t.lastChild.textContent=label;return t}
+function rmTile(k){if(tiles[k]){tiles[k].remove();delete tiles[k]}}
+const label=(id,scr)=>(names[id]||'Participante')+(scr?' · tela':'');
+function relabel(id){if(tiles[id])tiles[id].lastChild.textContent=label(id);if(tiles[id+'|s'])tiles[id+'|s'].lastChild.textContent=label(id,1)}
+function reg(d){dc[d.peer]=d;d.on('open',()=>d.send({t:'hi',name:myName}));d.on('data',m=>ctl(d,m));d.on('close',()=>drop(d.peer));d.on('error',()=>{})}
+function ctl(d,m){const id=d.peer;if(!m)return;
+  if(m.t==='hi'){names[id]=String(m.name).slice(0,24);relabel(id);
+    if(screen&&!out[id])out[id]=peer.call(id,screen,{metadata:{name:myName,scr:1}});
+    if(host)d.send({t:'peers',list:Object.keys(dc).filter(x=>x!==id)})}
+  else if(m.t==='peers'&&Array.isArray(m.list)){[...m.list,id].forEach(x=>{if(x===peer.id)return;if(!dc[x])reg(peer.connect(x,{reliable:true}));
+    if(!calls[x])hook(peer.call(x,lm(),{metadata:{name:myName}}),x,0)})}
+  else if(m.t==='scr'&&!m.on)rmTile(id+'|s')}
+function hook(c,id,scr){const k=id+(scr?'|s':'');if(!scr)calls[id]=c;
+  c.on('stream',s=>tile(k,s,label(id,scr),0,scr));c.on('close',()=>rmTile(k));c.on('error',()=>{})}
+function drop(id){['','|s'].forEach(x=>rmTile(id+x));if(calls[id])calls[id].close();delete dc[id];delete calls[id];delete out[id];delete names[id]}
+function tog(kind,btn,l){const t=local&&local[kind]()[0];if(!t)return;t.enabled=!t.enabled;btn.classList.toggle('off',!t.enabled);btn.textContent=l+(t.enabled?'':' (off)')}
+$('bm').onclick=()=>tog('getAudioTracks',$('bm'),'🎤 Mic');
+$('bc').onclick=()=>tog('getVideoTracks',$('bc'),'📷 Câmera');
+$('bs').onclick=async()=>{if(screen)return stopShare();
+  try{screen=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true})}catch(e){screen=null;return}
+  screen.getVideoTracks()[0].onended=stopShare;$('bs').textContent='⏹ Parar tela';tile('me|s',screen,'Sua tela',1,1);
+  Object.keys(dc).forEach(id=>{out[id]=peer.call(id,screen,{metadata:{name:myName,scr:1}})})};
+function stopShare(){if(!screen)return;screen.getTracks().forEach(t=>t.stop());Object.values(out).forEach(c=>c.close());
+  Object.values(dc).forEach(d=>{try{d.send({t:'scr',on:false})}catch(e){}});out={};rmTile('me|s');screen=null;$('bs').textContent='🖥 Compartilhar tela'}
+$('cp').onclick=()=>{const b=$('cp'),f=t=>{b.textContent=t;setTimeout(()=>b.textContent='Copiar link',1800)};
+  (navigator.clipboard?navigator.clipboard.writeText(location.href.split('#')[0]+'#'+code):Promise.reject()).then(()=>f('Copiado!'),()=>f('Copie o código'))};
+function leave(){stopShare();if(local)local.getTracks().forEach(t=>t.stop());local=null;Object.keys(tiles).forEach(rmTile);
+  if(peer)peer.destroy();peer=null;dc={};calls={};out={};names={};$('call').hidden=true;$('home').hidden=false;
+  ['bm','bc'].forEach(i=>$(i).classList.remove('off'));$('bm').textContent='🎤 Mic';$('bc').textContent='📷 Câmera';drawRecents()}
+$('bl').onclick=leave;
+</script></body></html>
